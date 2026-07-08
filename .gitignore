@@ -1,0 +1,5 @@
+# copyrighted game data — never commit the raw files
+*.mag
+*.gfx
+*.d64
+*.adf
