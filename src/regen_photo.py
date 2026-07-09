@@ -32,27 +32,59 @@ MODEL = os.environ.get('GEMINI_IMAGE_MODEL', 'gemini-3.1-flash-image')
 ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent'
 
 # Single shared prompt for BOTH engines — see tools/prompt.py
-from prompt import STYLE, REFINE, prompt_for  # noqa: E402,F401
+from prompt import STYLE, REFINE, prompt_for, refine_for  # noqa: E402,F401
 
 
 class Blocked(RuntimeError):
     """Safety refusal — retrying the same request is pointless."""
 
 
+def dither_mask(im, thresh=6, gmax=14):
+    """Pixels belonging to an ordered-dither lattice, rather than to real detail.
+
+    Two tests, and both are needed. A median leaves step edges alone but disturbs
+    a checkerboard, so |image - median| finds the lattice. That alone flags ~70%
+    of these frames, including thin one-pixel highlights — the lattice and a
+    scythe blade live in the same frequency band. So intersect it with a
+    flatness test on the *median* image, where real edges survive and the dither
+    does not: what is left is dither sitting in an otherwise featureless area.
+    """
+    import numpy as np
+    from PIL import ImageFilter
+    g = np.asarray(im.convert('L'), float)
+    m = np.asarray(im.convert('L').filter(ImageFilter.MedianFilter(3)), float)
+    dith = np.abs(g - m) > thresh
+    gx, gy = np.gradient(m)
+    flat = np.hypot(gx, gy) < gmax                 # nothing real to lose here
+    mask = dith & flat
+    grow = mask.copy()                             # cover the lattice's own borders...
+    for dy in (-1, 0, 1):
+        for dx in (-1, 0, 1):
+            grow |= np.roll(np.roll(mask, dy, 0), dx, 1)
+    return grow & flat                             # ...but never spill into structure
+
+
 def reference_png(path, dedither=True, scale=3):
     """The reference image handed to the model.
 
-    The 16-colour originals fake intermediate shades with a 1px checkerboard.
-    Image-to-image copies that local pattern verbatim, so it resurfaces as woven
-    texture in the "photograph" — prompting alone does not fix it. A 3px median
-    merges the dither pairs into flat tone; a smooth upscale dissolves the pixel
-    grid. Deliberately gentle: blurring harder erases information the model then
-    re-invents (invented windows, extra fire), and flattens already-flat art.
+    The 16-colour originals fake intermediate shades with an ordered dither — a
+    regular 1-2px lattice (verified at pixel level on The Pawn's pic_03 robe).
+    Image-to-image copies that lattice verbatim, so it resurfaces as woven or
+    knitted cloth in the "photograph". Prompting cannot fix what is in the pixels.
+
+    A whole-frame median or blur removes the lattice but equally softens thin
+    one-pixel structures — a scythe blade, a railing — and the model then
+    re-invents what was erased: that is where the drift, the invented window and
+    the extra fire came from. A 3px median also cannot touch a 2px-period lattice
+    at all. So: a 3x3 box blur, applied ONLY where the lattice sits in flat areas.
     """
+    import numpy as np
     from PIL import ImageFilter
     im = Image.open(path).convert('RGB')
     if dedither:
-        im = im.filter(ImageFilter.MedianFilter(3))
+        smooth = np.asarray(im.filter(ImageFilter.BoxBlur(1)), float)
+        mask = dither_mask(im)[..., None]
+        im = Image.fromarray(np.where(mask, smooth, np.asarray(im, float)).astype('uint8'))
     im = im.resize((im.width * scale, im.height * scale), Image.LANCZOS)
     buf = io.BytesIO()
     im.save(buf, 'PNG')
@@ -166,7 +198,7 @@ def main():
             if args.refine:
                 print('[refine]', end=' ', flush=True)
                 try:
-                    png = call(key, REFINE, None, ref_bytes=png)
+                    png = call(key, refine_for(f), None, ref_bytes=png)
                 except Exception as e:      # keep pass 1 rather than lose the frame
                     print('[refine failed: %s]' % str(e)[:40], end=' ', flush=True)
             save(png, out, size, aspect)

@@ -39,7 +39,19 @@ OPEN = (
     'Photograph this exact scene for real, on location. We are reconstructing low-resolution '
     '16-bit-era game graphics as real-life photographs: the attached picture is a 16-colour image '
     'from a 1980s Amiga adventure game, and it is the exact structural blueprint for the '
-    'photograph. Above all else the two must register: they are shown in a viewer that switches '
+    'photograph. '
+
+    # The user asked for this explicitly: name the input's poverty, and make the
+    # operation super-resolution — the palette and the pixel grid are limits to be
+    # undone, not features to be reproduced.
+    'The blueprint is very low resolution, only a few hundred pixels across, and it is limited to '
+    'a palette of just 16 colours. Super-scale it. Everything it renders coarsely — a shape a few '
+    'pixels wide, a colour it could only approximate, a shade it had to fake — is a limit of that '
+    '1980s hardware, and it stands for the full, continuous, high-resolution reality behind it. '
+    'Restore that reality: millions of colours, smooth gradients, and detail resolved all the way '
+    'down to what a modern full-frame sensor records. '
+
+    'Above all else the two must register: they are shown in a viewer that switches '
     'back and forth between them, so every element has to sit in precisely the same place in both, '
     'and cross-fading one into the other must reveal no movement at all. Keep the composition, '
     'framing, camera angle, perspective, scale, and the position and silhouette of every single '
@@ -66,16 +78,30 @@ SCENARIO = (
     'render the true silhouette it approximates. This photograph resolves far more than the '
     'blueprint could hold, so show the fine detail it had to leave out — where a handful of flat '
     'pixels stand in for a face, a hand, a leaf, brickwork or a distant tree, show that thing '
-    'whole and believable. Fantastical subjects are realised as practical props, built sets, '
-    'costumes, make-up and creature effects, and then photographed. ')
+    'whole and believable. '
+
+    # "Complete what is hinted at, add nothing new" — both halves positive, and the
+    # completion licenses DETAIL on shapes already present, never new objects.
+    # Naming "an object half lost in shadow" put a door and wall lamps into a dark
+    # wall; empty space must be stated as staying empty.
+    'Every shape the blueprint already shows gains the detail it always had: a face reduced to a '
+    'smudge of pixels resolves into one particular face, a few green pixels into individual leaves, '
+    'a flat band of wall into its courses and mortar, a suggested texture into the real grain of '
+    'the thing. The photograph holds the very same things as the blueprint, seen properly for the '
+    'first time — its inventory of objects is already complete, and each object simply becomes '
+    'itself in full. Where the blueprint is bare, dark or empty, the photograph is bare, dark and '
+    'empty too, with nothing in it but real air, real light and the surfaces already there. '
+
+    'Creatures, figures and impossible places are as physically present, as '
+    'ordinarily lit and as plainly real as everything else in the frame. ')
 
 # [style] — positive photographic description; the camera Kenneth specified
 STYLE_TAIL = (
     'The result is a straight, unretouched photograph shot on a Sony Alpha 7R VI with an '
     'appropriate fixed lens using the right aperture for the shot: natural available light, '
     'physically correct shadows and reflections, natural depth of field, true-to-life colour, '
-    'continuous photographic tone and crisp optical detail throughout, faithful to the mood of the '
-    'original. A clean, full-bleed frame.')
+    'continuous photographic tone and crisp optical detail throughout, at the same time of day, '
+    'weather and quality of light as the blueprint. A clean, full-bleed frame.')
 
 # Kept for backwards compatibility with anything importing STYLE.
 STYLE = OPEN + SCENARIO + STYLE_TAIL
@@ -84,17 +110,39 @@ STYLE = OPEN + SCENARIO + STYLE_TAIL
 # blueprint, so composition is cheap to hold and every word can buy realism.
 # A raw reference in pass 1 keeps the geometry but also keeps the source's flat,
 # illustrated look; this pass converts that look into photography.
-REFINE = (
+_REFINE_HEAD = (
     'Re-photograph this image as a real photograph, keeping every element in precisely the same '
     'place: identical composition, framing, camera angle, perspective and scale, with every object '
-    'the same size and in the same position. Change only how it is rendered. It becomes an actual '
-    'photograph taken on a Sony Alpha 7R VI with an appropriate fixed lens at the right aperture: '
-    'real optics with natural depth of field and a soft falloff to the background, fine sensor-level '
-    'detail, believable micro-contrast, subtle lens vignetting, natural available light with '
-    'physically correct shadows, bounce and reflection, and true-to-life colour. Surfaces gain the '
-    'response of the real materials they are — the grain and pores of wood, stone, metal, cloth, '
-    'leaf and skin under that light. The finished frame is indistinguishable from a photograph '
-    'taken on location. A clean, full-bleed frame.')
+    'the same size and in the same position. Change only how it is rendered. ')
+
+_REFINE_BODY = (
+    'It becomes an actual photograph taken on a Sony Alpha 7R VI with an appropriate fixed lens at '
+    'the right aperture: real optics with natural depth of field and a soft falloff to the '
+    'background, fine sensor-level detail, believable micro-contrast, subtle lens vignetting, '
+    'natural available light with physically correct shadows, bounce and reflection, and '
+    'true-to-life colour. '
+
+    # The raw reference in pass 1 copies the source's dither grid into cloth and stone, where it
+    # reads as weave. Say what a real surface looks like — irregular — rather than naming the flaw.
+    'Every surface carries the irregular, one-of-a-kind texture of the real material it is made '
+    'of, varying everywhere across the frame: the wandering grain and knots of wood, the random '
+    'grit and erosion of stone, the drawn marks and dents of metal, the loose fibres and folds of '
+    'cloth, the veins of a leaf, the pores and fine hairs of skin — each unique, each catching that '
+    'light differently. Anything the lens would resolve as living matter is soft, warm and alive. '
+    'The finished frame is indistinguishable from a photograph taken on location. A clean, '
+    'full-bleed frame.')
+
+REFINE = _REFINE_HEAD + _REFINE_BODY
+
+
+def refine_for(name):
+    """Pass-2 prompt. Naming the scene lets the model reason about its materials."""
+    m = re.search(r'(\d+)', name)
+    ctx = CONTEXT.get(str(int(m.group(1)))) if m else None
+    p = _REFINE_HEAD
+    if ctx:
+        p += 'It is a photograph of %s. ' % ctx
+    return p + _REFINE_BODY
 
 
 def has_water(num, ctx):
