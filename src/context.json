@@ -1,5 +1,8 @@
 {
-  "_setting": "the fantasy kingdom of Kerovnia — largely a timeless medieval-fantasy land of forests, paths, huts and palaces, but with occasional playful anachronisms (a rock-and-roll pianist, a chemistry laboratory). Render each scene exactly in whatever period and style its own contents imply; never force a scene to look medieval.",
+  "_setting": "the fantasy kingdom of Kerovnia, a present-day world of forests, gravel paths, grassy plains, huts, sheds, workshops and palaces; each place appears in whatever period and style its own contents imply.",
+  "_water": [
+    "5"
+  ],
   "0": "palace gardens",
   "1": "rope bridge",
   "2": "workshop",

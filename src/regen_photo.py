@@ -27,26 +27,48 @@ ORIG = os.path.join(WEB, 'art', 'orig')
 REGEN = os.path.join(WEB, 'art', 'regen')
 REGEN_HI = os.path.join(WEB, 'art', 'regen_hi')   # full-res output (separate)
 
-MODEL = 'gemini-3.1-flash-image'   # Nano Banana 2
-ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent' % MODEL
+# Nano Banana 2 (there is no "1.5"); Pro = gemini-3-pro-image, older = gemini-2.5-flash-image
+MODEL = os.environ.get('GEMINI_IMAGE_MODEL', 'gemini-3.1-flash-image')
+ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent'
 
 # Single shared prompt for BOTH engines — see tools/prompt.py
-from prompt import STYLE, prompt_for  # noqa: E402,F401
+from prompt import STYLE, REFINE, prompt_for  # noqa: E402,F401
 
 
 class Blocked(RuntimeError):
     """Safety refusal — retrying the same request is pointless."""
 
 
-def call(key, prompt, in_path, aspect='16:9', retries=3, include_image=True):
+def reference_png(path, dedither=True, scale=3):
+    """The reference image handed to the model.
+
+    The 16-colour originals fake intermediate shades with a 1px checkerboard.
+    Image-to-image copies that local pattern verbatim, so it resurfaces as woven
+    texture in the "photograph" — prompting alone does not fix it. A 3px median
+    merges the dither pairs into flat tone; a smooth upscale dissolves the pixel
+    grid. Deliberately gentle: blurring harder erases information the model then
+    re-invents (invented windows, extra fire), and flattens already-flat art.
+    """
+    from PIL import ImageFilter
+    im = Image.open(path).convert('RGB')
+    if dedither:
+        im = im.filter(ImageFilter.MedianFilter(3))
+    im = im.resize((im.width * scale, im.height * scale), Image.LANCZOS)
+    buf = io.BytesIO()
+    im.save(buf, 'PNG')
+    return buf.getvalue()
+
+
+def call(key, prompt, in_path, aspect='16:9', retries=3, include_image=True,
+         dedither=True, ref_bytes=None):
     gen = {'responseModalities': ['IMAGE'], 'imageConfig': {'aspectRatio': aspect}}
     parts = [{'text': prompt}]
     if include_image:
-        with open(in_path, 'rb') as f:
-            parts.append({'inline_data': {'mime_type': 'image/png',
-                                          'data': base64.b64encode(f.read()).decode()}})
+        ref = ref_bytes if ref_bytes is not None else reference_png(in_path, dedither)
+        parts.append({'inline_data': {'mime_type': 'image/png',
+                                      'data': base64.b64encode(ref).decode()}})
     body = json.dumps({'contents': [{'parts': parts}], 'generationConfig': gen}).encode()
-    url = ENDPOINT + '?key=' + key
+    url = (ENDPOINT % MODEL) + '?key=' + key
     last = None
     for att in range(retries):
         try:
@@ -101,13 +123,18 @@ def save(png, out_path, size, aspect=None):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--only'); ap.add_argument('--force', action='store_true')
+    ap.add_argument('--outdir', help='write here instead of art/regen_hi (for A/B tests)')
+    ap.add_argument('--no-dedither', dest='dedither', action='store_false',
+                    help='send the raw pixel art as the reference (no median filter)')
+    ap.add_argument('--refine', action='store_true',
+                    help='second pass: re-photograph pass 1 output for realism')
     ap.add_argument('--hires', action='store_true',
                     help='save native full-resolution output to art/regen_hi/ '
                          '(does not touch the existing art/regen/ files)')
     args = ap.parse_args()
     key = os.environ.get('GEMINI_API_KEY') or sys.exit('GEMINI_API_KEY not set')
 
-    outdir = REGEN_HI if args.hires else REGEN
+    outdir = args.outdir or (REGEN_HI if args.hires else REGEN)
     os.makedirs(outdir, exist_ok=True)
 
     files = sorted(f for f in os.listdir(ORIG) if f.endswith('.png'))
@@ -123,13 +150,25 @@ def main():
         aspect = (ow / oh) if args.hires else None   # crop to the original's aspect
         print('photo-regen', f, ('(native res)' if args.hires else size), '...', end=' ', flush=True)
         try:
+            src = os.path.join(ORIG, f)
             try:
-                png = call(key, prompt_for(f), os.path.join(ORIG, f))
+                png = call(key, prompt_for(f), src, dedither=args.dedither)
             except Blocked as b:
-                # Gemini sometimes refuses the *reference image* (e.g. a likeness).
-                # Composition fidelity suffers, but the scene still gets made.
-                print('[blocked: %s -> text-only]' % b, end=' ', flush=True)
-                png = call(key, prompt_for(f), None, include_image=False)
+                # Smoothing can push a reference over a safety threshold that the
+                # raw pixel-art never crossed, so try the raw image before giving
+                # up the reference entirely: text-only loses the composition.
+                print('[blocked: %s -> raw ref]' % b, end=' ', flush=True)
+                try:
+                    png = call(key, prompt_for(f), src, dedither=False)
+                except Blocked as b2:
+                    print('[blocked: %s -> text-only]' % b2, end=' ', flush=True)
+                    png = call(key, prompt_for(f), None, include_image=False)
+            if args.refine:
+                print('[refine]', end=' ', flush=True)
+                try:
+                    png = call(key, REFINE, None, ref_bytes=png)
+                except Exception as e:      # keep pass 1 rather than lose the frame
+                    print('[refine failed: %s]' % str(e)[:40], end=' ', flush=True)
             save(png, out, size, aspect)
             got = Image.open(out).size
             print('ok', got); done += 1
